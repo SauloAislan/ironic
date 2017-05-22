@@ -24,6 +24,7 @@ from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.conductor import task_manager
 from ironic.drivers.modules.oneview import common
+from ironic.drivers.modules.oneview import deploy_utils
 from ironic.drivers.modules.oneview import management
 from ironic.tests.unit.conductor import mgr_utils
 from ironic.tests.unit.db import base as db_base
@@ -33,9 +34,10 @@ from ironic.tests.unit.objects import utils as obj_utils
 
 oneview_exceptions = importutils.try_import('oneview_client.exceptions')
 oneview_models = importutils.try_import('oneview_client.models')
+client_exception = importutils.try_import('hpOneView.exceptions')
 
 
-@mock.patch.object(common, 'get_oneview_client', spect_set=True, autospec=True)
+@mock.patch.object(common, 'get_hponeview_client')
 class OneViewManagementDriverTestCase(db_base.DbTestCase):
 
     def setUp(self):
@@ -54,66 +56,33 @@ class OneViewManagementDriverTestCase(db_base.DbTestCase):
         )
         self.info = common.get_oneview_info(self.node)
 
-    @mock.patch.object(common, 'validate_oneview_resources_compatibility',
-                       spect_set=True, autospec=True)
-    def test_validate(self, mock_validate, mock_get_ov_client):
-        oneview_client = mock_get_ov_client()
-        self.driver.management.oneview_client = oneview_client
-
-        fake_server_hardware = oneview_models.ServerHardware()
-        fake_server_hardware.server_profile_uri = 'any/applied_sp_uri/'
-
-        oneview_client.get_server_hardware_by_uuid.return_value = (
-            fake_server_hardware
-        )
-        mock_get_ov_client.return_value = oneview_client
-
-        driver_info = self.node.driver_info
-        driver_info['applied_server_profile_uri'] = 'any/applied_sp_uri/'
-
-        self.node.driver_info = driver_info
-        self.node.save()
-
+    @mock.patch.object(deploy_utils, 'is_node_in_use_by_ironic')
+    @mock.patch.object(common, 'validate_oneview_resources_compatibility')
+    def test_validate(self, mock_validate, mock_ironic_node, mock_ovclient):
+        mock_ironic_node.return_value = True
         with task_manager.acquire(self.context, self.node.uuid) as task:
             task.driver.management.validate(task)
             self.assertTrue(mock_validate.called)
 
-    @mock.patch.object(common, 'validate_oneview_resources_compatibility',
-                       spect_set=True, autospec=True)
-    def test_validate_for_node_not_in_use_by_ironic(self,
-                                                    mock_validate,
-                                                    mock_get_ov_client):
-        oneview_client = mock_get_ov_client()
-
-        fake_server_hardware = oneview_models.ServerHardware()
-        fake_server_hardware.server_profile_uri = 'any/applied_sp_uri/'
-
-        oneview_client.get_server_hardware_by_uuid.return_value = (
-            fake_server_hardware
-        )
-        mock_get_ov_client.return_value = oneview_client
-
-        driver_info = self.node.driver_info
-        driver_info['applied_server_profile_uri'] = 'other/applied_sp_uri/'
-
-        self.node.driver_info = driver_info
-        self.node.save()
-
+    @mock.patch.object(deploy_utils, 'is_node_in_use_by_ironic')
+    @mock.patch.object(common, 'validate_oneview_resources_compatibility')
+    def test_validate_for_node_not_in_use_by_ironic(
+            self, mock_validate, mock_ironic_node, mock_ovclient):
+        mock_ironic_node.return_value = False
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertRaises(exception.InvalidParameterValue,
                               task.driver.management.validate, task)
 
     def test_validate_fail(self, mock_get_ov_client):
-        node = obj_utils.create_test_node(self.context,
-                                          uuid=uuidutils.generate_uuid(),
-                                          id=999,
-                                          driver='fake_oneview')
+        node = obj_utils.create_test_node(
+            self.context, uuid=uuidutils.generate_uuid(),
+            id=999, driver='fake_oneview'
+        )
         with task_manager.acquire(self.context, node.uuid) as task:
             self.assertRaises(exception.MissingParameterValue,
                               task.driver.management.validate, task)
 
-    @mock.patch.object(common, 'validate_oneview_resources_compatibility',
-                       spect_set=True, autospec=True)
+    @mock.patch.object(common, 'validate_oneview_resources_compatibility')
     def test_validate_fail_exception(self, mock_validate, mock_get_ov_client):
         mock_validate.side_effect = exception.OneViewError('message')
         with task_manager.acquire(self.context, self.node.uuid) as task:
@@ -123,119 +92,139 @@ class OneViewManagementDriverTestCase(db_base.DbTestCase):
 
     def test_get_properties(self, mock_get_ov_client):
         expected = common.COMMON_PROPERTIES
-        self.assertItemsEqual(expected,
-                              self.driver.management.get_properties())
-
-    def test_set_boot_device(self, mock_get_ov_client):
-        oneview_client = mock_get_ov_client()
-        self.driver.management.oneview_client = oneview_client
-
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.driver.management.set_boot_device(task, boot_devices.PXE)
-        oneview_client.set_boot_device.assert_called_once_with(
-            self.info,
-            management.BOOT_DEVICE_MAPPING_TO_OV[boot_devices.PXE],
-            onetime=True
+        self.assertItemsEqual(
+            expected, self.driver.management.get_properties()
         )
 
-    def test_set_boot_device_persistent(self, mock_get_ov_client):
+    def test_set_boot_device_to_profile(self, mock_get_ov_client):
         oneview_client = mock_get_ov_client()
-        self.driver.management.oneview_client = oneview_client
+        order = ['CD', 'Floppy', 'USB', 'HardDisk', 'PXE']
+        profile = {'boot': {'order': order}}
+        order_expected = ['PXE', 'CD', 'Floppy', 'USB', 'HardDisk']
+        expected_profile = {'boot': {'order': order_expected}}
 
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.driver.management.set_boot_device(task, boot_devices.PXE,
-                                                   persistent=True)
-        oneview_client.set_boot_device.assert_called_once_with(
-            self.info,
-            management.BOOT_DEVICE_MAPPING_TO_OV[boot_devices.PXE],
-            onetime=False
-        )
+        oneview_client.server_profiles.get.return_value = profile
 
-    def test_set_boot_device_invalid_device(self, mock_get_ov_client):
+        management.set_boot_device_to_profile(oneview_client, 'PXE', profile)
+        self.assertEqual(expected_profile, profile)
+
+    @mock.patch.object(management, 'set_boot_device_to_profile')
+    def test_set_boot_device(self, mock_set_boot_device, mock_get_ov_client):
         oneview_client = mock_get_ov_client()
-        self.driver.management.oneview_client = oneview_client
+        self.driver.management.hponeview_client = oneview_client
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.driver.management.set_boot_device,
-                              task, 'fake-device')
-        self.assertFalse(oneview_client.set_boot_device.called)
-
-    def test_set_boot_device_fail_to_get_server_profile(self,
-                                                        mock_get_ov_client):
-        oneview_client = mock_get_ov_client()
-        oneview_client.get_server_profile_from_hardware.side_effect = \
-            oneview_exceptions.OneViewException()
-        self.driver.management.oneview_client = oneview_client
-
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertRaises(exception.OneViewError,
-                              self.driver.management.set_boot_device,
-                              task, 'disk')
-        self.assertFalse(oneview_client.set_boot_device.called)
-
-    def test_set_boot_device_without_server_profile(self, mock_get_ov_client):
-        oneview_client = mock_get_ov_client()
-        oneview_client.get_server_profile_from_hardware.return_value = False
-        self.driver.management.oneview_client = oneview_client
-
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            expected_msg = (
-                'A Server Profile is not associated with node %s.'
-                % self.node.uuid
+            task.node.driver_info['applied_server_profile_uri'] = (
+                'fake_server_profile_uri'
             )
-            self.assertRaisesRegex(
-                exception.OperationNotPermitted,
-                expected_msg,
+            self.driver.management.set_boot_device(
+                task, boot_devices.PXE, True
+            )
+            mock_set_boot_device.assert_called_once_with(
+                oneview_client,
+                'PXE',
+                'fake_server_profile_uri'
+            )
+
+    @mock.patch.object(management, 'set_boot_device_to_profile')
+    def test_set_boot_device_invalid_device(
+            self, mock_set_boot_device, mock_get_ov_client):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(
+                exception.InvalidParameterValue,
                 self.driver.management.set_boot_device,
                 task,
-                'disk'
+                'fake-device'
             )
+            self.assertFalse(mock_set_boot_device.called)
+
+    @mock.patch.object(management, 'set_onetime_boot')
+    def test_set_boot_device_not_persistent(
+            self, mock_onetime_boot, mock_get_ov_client):
+        oneview_client = mock_get_ov_client()
+        self.driver.management.hponeview_client = oneview_client
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.driver.management.set_boot_device(task, boot_devices.PXE)
+            mock_onetime_boot.assert_called_once_with(
+                oneview_client, 'fake_sh_uri', "Pxe")
+
+    @mock.patch.object(common, 'get_ilo_access')
+    @mock.patch.object(common, 'get_ilorest_client')
+    def test_set_onetime_boot(
+            self, mock_iloclient, mock_iloaccess, mock_get_ov_client):
+        oneview_client = mock_get_ov_client()
+        ilo_client = mock_iloclient()
+        mock_iloaccess.return_value = ('fake_ip', 'fake_token')
+        oneview_client.server_hardware.get_remote_console_url.return_value = (
+            'fake_url'
+        )
+        fake_body = {"Boot": {"BootSourceOverrideTarget": "Pxe",
+                              "BootSourceOverrideEnabled": "Once"}}
+        fake_headers = {"Content-Type": "application/json"}
+
+        management.set_onetime_boot(
+            oneview_client, 'server_hardaware_uri', "Pxe")
+        ilo_client.patch.assert_called_with(
+            path='/rest/v1/Systems/1', body=fake_body, headers=fake_headers)
+
+    def test_set_boot_device_fail_to_get_server_profile(
+            self, mock_get_ov_client):
+        oneview_client = mock_get_ov_client()
+        exc = client_exception.HPOneViewException()
+        oneview_client.server_profiles.get.side_effect = exc
+        self.driver.management.hponeview_client = oneview_client
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(
+                exception.OneViewError,
+                self.driver.management.set_boot_device,
+                task, 'disk', True
+            )
+        self.assertFalse(oneview_client.server_profiles.update.called)
 
     def test_get_supported_boot_devices(self, mock_get_ov_client):
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            expected = [boot_devices.PXE, boot_devices.DISK,
-                        boot_devices.CDROM]
+            expected = [
+                boot_devices.PXE, boot_devices.DISK, boot_devices.CDROM
+            ]
             self.assertItemsEqual(
                 expected,
                 task.driver.management.get_supported_boot_devices(task),
             )
 
     def test_get_boot_device(self, mock_get_ov_client):
-        device_mapping = management.BOOT_DEVICE_MAPPING_TO_OV
         oneview_client = mock_get_ov_client()
-        self.driver.management.oneview_client = oneview_client
+        self.driver.management.hponeview_client = oneview_client
 
         with task_manager.acquire(self.context, self.node.uuid) as task:
             # For each known device on OneView, Ironic should return its
             # counterpart value
-            for device_ironic, device_ov in device_mapping.items():
-                oneview_client.get_boot_order.return_value = [device_ov]
-                expected_response = {
-                    'boot_device': device_ironic,
-                    'persistent': True
-                }
+            device_mapping = management.BOOT_DEVICE_MAPPING_TO_OV
+            for ironic_device, oneview_device in device_mapping.items():
+                profile = {'boot': {'order': [oneview_device]}}
+                oneview_client.server_profiles.get.return_value = profile
+                expected = {'boot_device': ironic_device, 'persistent': True}
                 response = self.driver.management.get_boot_device(task)
-                self.assertEqual(expected_response, response)
-        oneview_client.get_boot_order.assert_called_with(self.info)
+                self.assertEqual(expected, response)
+                self.assertTrue(oneview_client.server_profiles.get.called)
 
     def test_get_boot_device_fail(self, mock_get_ov_client):
         oneview_client = mock_get_ov_client()
-        oneview_client.get_boot_order.side_effect = \
-            oneview_exceptions.OneViewException()
-        self.driver.management.oneview_client = oneview_client
-
+        self.driver.management.hponeview_client = oneview_client
+        exc = client_exception.HPOneViewException()
+        oneview_client.server_profiles.get.side_effect = exc
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertRaises(exception.OneViewError,
-                              self.driver.management.get_boot_device,
-                              task)
-            oneview_client.get_boot_order.assert_called_with(self.info)
+            self.assertRaises(
+                exception.OneViewError,
+                self.driver.management.get_boot_device,
+                task
+            )
+            self.assertTrue(oneview_client.server_profiles.get.called)
 
     def test_get_boot_device_unknown_device(self, mock_get_ov_client):
         oneview_client = mock_get_ov_client()
-        oneview_client.get_boot_order.return_value = ["spam",
-                                                      "bacon"]
-        self.driver.management.oneview_client = oneview_client
-
+        order = ['Eggs', 'Bacon']
+        profile = {'boot': {'order': order}}
+        oneview_client.server_profiles.get.return_value = profile
+        self.driver.management.hponeview_client = oneview_client
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertRaises(
                 exception.InvalidParameterValue,

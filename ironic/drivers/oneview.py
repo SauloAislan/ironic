@@ -13,9 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""
-OneView Driver and supporting meta-classes.
-"""
+"""OneView Driver and supporting meta-classes."""
 from oslo_utils import importutils
 
 from ironic.common import exception
@@ -44,6 +42,11 @@ class AgentPXEOneViewDriver(base.BaseDriver):
                 driver=self.__class__.__name__,
                 reason=_("Unable to import python-oneviewclient library"))
 
+        if not importutils.try_import('hpOneView.oneview_client'):
+            raise exception.DriverLoadError(
+                driver=self.__class__.__name__,
+                reason=_("Unable to import hpOneView library"))
+
         # Checks connectivity to OneView and version compatibility on driver
         # initialization
         oneview_client = common.get_oneview_client()
@@ -71,6 +74,11 @@ class ISCSIPXEOneViewDriver(base.BaseDriver):
             raise exception.DriverLoadError(
                 driver=self.__class__.__name__,
                 reason=_("Unable to import python-oneviewclient library"))
+
+        if not importutils.try_import('hpOneView.oneview_client'):
+            raise exception.DriverLoadError(
+                driver=self.__class__.__name__,
+                reason=_("Unable to import hpOneView library"))
 
         # Checks connectivity to OneView and version compatibility on driver
         # initialization

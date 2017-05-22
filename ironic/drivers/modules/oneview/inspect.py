@@ -38,6 +38,7 @@ class OneViewInspect(inspector.Inspector):
 
     def __init__(self):
         super(OneViewInspect, self).__init__()
+        self.hponeview_client = common.get_hponeview_client()
         self.oneview_client = common.get_oneview_client()
 
     def get_properties(self):
@@ -45,7 +46,7 @@ class OneViewInspect(inspector.Inspector):
 
     @METRICS.timer('OneViewInspect.validate')
     def validate(self, task):
-        """Checks required info on 'driver_info' and validates node with OneView
+        """Check required info on 'driver_info' and validates node with OneView.
 
         Validates whether the 'driver_info' property of the supplied
         task's node contains the required info such as server_hardware_uri,
@@ -57,7 +58,6 @@ class OneViewInspect(inspector.Inspector):
         :raises: InvalidParameterValue if parameters set are inconsistent with
                  resources in OneView
         """
-
         common.verify_node_info(task.node)
 
         try:
@@ -98,12 +98,11 @@ class OneViewInspect(inspector.Inspector):
         state_after = task.node.provision_state
 
         # inspection finished
-        if (
-            state_before == states.INSPECTING and state_after in [
+        if state_before == states.INSPECTING and state_after in [
                 states.MANAGEABLE, states.INSPECTFAIL
-            ]
-        ):
+        ]:
             deploy_utils.deallocate_server_hardware_from_ironic(
-                self.oneview_client, task.node)
+                self.hponeview_client, task.node
+            )
 
         return result

@@ -253,8 +253,7 @@ class OneViewCommonTestCase(db_base.DbTestCase):
     @mock.patch.object(common, 'get_oneview_client', spec_set=True,
                        autospec=True)
     def test_validate_oneview_resources_compatibility(
-        self, mock_get_ov_client
-    ):
+            self, mock_get_ov_client):
         """Validate compatibility of resources.
 
         1) Check validate_node_server_profile_template method is called

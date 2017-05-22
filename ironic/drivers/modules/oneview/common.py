@@ -35,6 +35,20 @@ oneview_exceptions = importutils.try_import('oneview_client.exceptions')
 
 hponeview_client = importutils.try_import('hpOneView.oneview_client')
 redfish = importutils.try_import('redfish')
+hpOneView_exception = importutils.try_import('hpOneView.exceptions')
+
+SET_POWER_STATE_MAP = {
+    states.POWER_ON: [
+        {'powerState': 'On'}
+    ],
+    states.POWER_OFF: [
+        {'powerState': 'Off', 'powerControl': 'PressAndHold'}
+    ],
+    states.REBOOT: [
+        {'powerState': 'Off', 'powerControl': 'PressAndHold'},
+        {'powerState': 'On'}
+    ]
+}
 
 REQUIRED_ON_DRIVER_INFO = {
     'server_hardware_uri': _("Server Hardware URI. Required in driver_info."),
@@ -71,7 +85,7 @@ SERVER_HARDWARE_ALLOCATION_ERROR = 'server hardware allocation error'
 
 
 def get_oneview_client():
-    """Generates an instance of the OneView client.
+    """Generate an instance of the OneView client.
 
     Generates an instance of the OneView client using the imported
     oneview_client library.
@@ -149,7 +163,7 @@ def get_ilo_access(remote_console):
 
 
 def verify_node_info(node):
-    """Verifies if fields and namespaces of a node are valid.
+    """Verify if fields and namespaces of a node are valid.
 
     Verifies if the 'driver_info' field and the 'properties/capabilities'
     namespace exist and are not empty.
@@ -173,7 +187,7 @@ def verify_node_info(node):
 
 
 def get_oneview_info(node):
-    """Gets OneView information from the node.
+    """Get OneView information from the node.
 
     :param: node: node object to get information from
     :returns: a dictionary containing:
@@ -185,7 +199,6 @@ def get_oneview_info(node):
             OneView
     :raises OneViewInvalidNodeParameter: if node capabilities are malformed
     """
-
     try:
         capabilities_dict = utils.capabilities_to_dict(
             node.properties.get('capabilities', '')
@@ -213,7 +226,7 @@ def get_oneview_info(node):
 
 
 def validate_oneview_resources_compatibility(oneview_client, task):
-    """Validates if the node configuration is consistent with OneView.
+    """Validate if the node configuration is consistent with OneView.
 
     This method calls python-oneviewclient functions to validate if the node
     configuration is consistent with the OneView resources it represents,
@@ -226,7 +239,6 @@ def validate_oneview_resources_compatibility(oneview_client, task):
     :param oneview_client: an instance of the OneView client
     :param: task: a TaskManager instance containing the node to act on.
     """
-
     node_ports = task.ports
 
     oneview_info = get_oneview_info(task.node)
@@ -256,27 +268,24 @@ def validate_oneview_resources_compatibility(oneview_client, task):
 
 
 def translate_oneview_power_state(power_state):
-    """Translates OneView's power states strings to Ironic's format.
+    """Translate OneView's power states strings to Ironic's format.
 
     :param: power_state: power state string to be translated
     :returns: the power state translated
     """
-
     power_states_map = {
-        oneview_states.ONEVIEW_POWER_ON: states.POWER_ON,
-        oneview_states.ONEVIEW_POWERING_OFF: states.POWER_ON,
-        oneview_states.ONEVIEW_POWER_OFF: states.POWER_OFF,
-        oneview_states.ONEVIEW_POWERING_ON: states.POWER_OFF,
-        oneview_states.ONEVIEW_RESETTING: states.REBOOT
+        'On': states.POWER_ON,
+        'PoweringOff': states.POWER_ON,
+        'Off': states.POWER_OFF,
+        'PoweringOn': states.POWER_OFF,
+        'Resetting': states.REBOOT
     }
 
     return power_states_map.get(power_state, states.ERROR)
 
 
 def _verify_node_info(node_namespace, node_info_dict, info_required):
-    """Verify if info_required is present in node_namespace of the node info.
-
-    """
+    """Verify if info_required is present in node_namespace."""
     missing_keys = set(info_required) - set(node_info_dict)
 
     if missing_keys:
@@ -300,24 +309,20 @@ def _verify_node_info(node_namespace, node_info_dict, info_required):
 
 
 def node_has_server_profile(func):
-    """Checks if the node's Server Hardware has a Server Profile associated.
-
-    """
+    """Check if the node's Server Hardware has a Server Profile associated."""
     def inner(self, *args, **kwargs):
-        oneview_client = self.oneview_client
+        oneview_client = self.hponeview_client
         task = args[0]
-        oneview_info = get_oneview_info(task.node)
         try:
-            node_has_server_profile = (
-                oneview_client.get_server_profile_from_hardware(oneview_info)
-            )
-        except oneview_exceptions.OneViewException as oneview_exc:
+            uuid = task.node.driver_info.get('applied_server_profile_uri')
+            node_has_server_profile = oneview_client.server_profiles.get(uuid)
+        except hpOneView_exception.HPOneViewException as exc:
             LOG.error(
                 "Failed to get server profile from OneView appliance for"
                 " node %(node)s. Error: %(message)s",
-                {"node": task.node.uuid, "message": oneview_exc}
+                {"node": task.node.uuid, "message": exc}
             )
-            raise exception.OneViewError(error=oneview_exc)
+            raise exception.OneViewError(error=exc)
         if not node_has_server_profile:
             raise exception.OperationNotPermitted(
                 _("A Server Profile is not associated with node %s.") %
