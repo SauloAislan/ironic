@@ -12,9 +12,9 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
 from oslo_log import log as logging
 from oslo_utils import importutils
+from six.moves.urllib import parse
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -24,10 +24,17 @@ from ironic.drivers import utils
 
 LOG = logging.getLogger(__name__)
 
+# NOTE(mrtenio): hpOneView will be the default library for OneView. It
+# is being introduced together with the python-oneviewclient to be used
+# generally by other patches. python-oneviewclient will be removed in this
+# patch https://review.openstack.org/#/c/480284
 client = importutils.try_import('oneview_client.client')
 oneview_utils = importutils.try_import('oneview_client.utils')
 oneview_states = importutils.try_import('oneview_client.states')
 oneview_exceptions = importutils.try_import('oneview_client.exceptions')
+
+hponeview_client = importutils.try_import('hpOneView.oneview_client')
+redfish = importutils.try_import('redfish')
 
 REQUIRED_ON_DRIVER_INFO = {
     'server_hardware_uri': _("Server Hardware URI. Required in driver_info."),
@@ -80,6 +87,65 @@ def get_oneview_client():
         max_polling_attempts=CONF.oneview.max_polling_attempts
     )
     return oneview_client
+
+
+def prepare_manager_url(manager_url):
+    # NOTE(mrtenio) python-oneviewclient uses https or http in the manager_url
+    # while python-hpOneView does not. This will not be necessary when
+    # python-hpOneView client is the only OneView library.
+    if "://" in manager_url:
+        manager_url = manager_url.split("://")[1]
+    manager_url = manager_url.replace("/", "")
+    return manager_url
+
+
+def get_hponeview_client():
+    """Generate an instance of the hpOneView client.
+
+    Generates an instance of the hpOneView client using the hpOneView library.
+
+    :returns: an instance of the OneViewClient
+    """
+    manager_url = prepare_manager_url(CONF.oneview.manager_url)
+    config = {
+        "ip": manager_url,
+        "credentials": {
+            "userName": CONF.oneview.username,
+            "password": CONF.oneview.password
+        }
+    }
+    return hponeview_client.OneViewClient(config)
+
+
+def get_ilorest_client(oneview_client, server_hardware):
+    """Generate an instance of the iLORest library client.
+
+    :param oneview_client: an instance of a python-hpOneView-client
+    :param: server_hardware: a server hardware id or uri
+    :returns: an instance of the iLORest client
+    """
+    remote_console = oneview_client.server_hardware.get_remote_console_url(
+        server_hardware
+    )
+    host_ip, ilo_token = get_ilo_access(remote_console)
+    return redfish.rest_client(base_url=host_ip, sessionkey=ilo_token)
+
+
+def get_ilo_access(remote_console):
+    """Get the needed information to access ilo.
+
+    Get the host_ip and a token of an iLO remote console instance which can be
+    used to perform operations on that controller.
+
+    :param: remote_console: OneView Remote Console object with a
+            remoteConsoleUrl
+    :returns: A tuple with the Host IP and Token to access ilo
+    """
+    url = remote_console.get('remoteConsoleUrl')
+    url_parse = parse.urlparse(url)
+    [host_ip] = parse.parse_qs(url_parse.netloc).get('addr')
+    [token] = parse.parse_qs(url_parse.netloc).get('sessionkey')
+    return host_ip, token
 
 
 def verify_node_info(node):

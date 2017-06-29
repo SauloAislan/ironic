@@ -271,6 +271,7 @@ class TestOneViewAgentDeploy(db_base.DbTestCase):
 
     def setUp(self):
         super(TestOneViewAgentDeploy, self).setUp()
+        self.config(manager_url='https://1.2.3.4', group='oneview')
         self.config(
             post_deploy_get_power_state_retries=GET_POWER_STATE_RETRIES,
             group='agent')
