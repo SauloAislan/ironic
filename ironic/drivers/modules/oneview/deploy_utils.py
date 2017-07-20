@@ -136,7 +136,7 @@ def tear_down_cleaning(hponeview_client, task):
 
 def _create_profile_from_template(
         hponeview_client, server_profile_name,
-        server_hardware_uri, server_profile_template):
+        server_hardware_uri, server_profile_template, deploy_plan_uri):
     """Create a server profile from a server profile template.
 
     :param hponeview_client: an hpOneView Client instance
@@ -147,12 +147,18 @@ def _create_profile_from_template(
               hardware passed on parameters
 
     """
+    deployment_plan = {
+        "osDeploymentPlanUri": deploy_plan_uri,
+        "osCustomAttributes": [],
+        "osVolumeUri": None
+    }
     server_profile = hponeview_client.server_profile_templates.get_new_profile(
         server_profile_template
     )
     server_profile['name'] = server_profile_name
     server_profile['serverHardwareUri'] = server_hardware_uri
     server_profile['serverProfileTemplateUri'] = ""
+    server_profile['osDeploymentSettings'] = deployment_plan
     hponeview_client.server_profiles.create(server_profile)
 
     return hponeview_client.server_profiles.get_by_name(server_profile_name)
@@ -302,6 +308,7 @@ def allocate_server_hardware_to_ironic(hponeview_client, node,
     if not node_in_use_by_oneview:
         oneview_info = common.get_oneview_info(node)
         applied_sp_uri = node.driver_info.get('applied_server_profile_uri')
+        deploy_plan_uri = node.driver_info.get('deployment_plan_uri')
         sh_uri = oneview_info.get("server_hardware_uri")
         spt_uri = oneview_info.get("server_profile_template_uri")
         server_hardware = hponeview_client.server_hardware.get(sh_uri)
@@ -332,7 +339,8 @@ def allocate_server_hardware_to_ironic(hponeview_client, node,
 
         try:
             applied_profile = _create_profile_from_template(
-                hponeview_client, server_profile_name, sh_uri, spt_uri
+                hponeview_client, server_profile_name, sh_uri, spt_uri,
+                deploy_plan_uri
             )
             _add_applied_server_profile_uri_field(node, applied_profile)
 
