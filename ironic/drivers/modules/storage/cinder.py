@@ -357,12 +357,12 @@ class CinderStorage(base.StorageInterface):
         # exists here because if the validation has already been passed
         # then we know that there should be a volume. If there is an
         # image_source, then we should expect to write it out.
-        #instance_info = task.node.instance_info
-        #if 'image_source' not in instance_info:
-        #    for volume in task.volume_targets:
-        #        if volume['boot_index'] == 0:
-        #            return False
-        return False
+        instance_info = task.node.instance_info
+        if 'image_source' not in instance_info:
+            for volume in task.volume_targets:
+                if volume['boot_index'] == 0:
+                    return False
+        return True
 
     def _generate_connector(self, task):
         """Generate cinder connector value based upon the node.
