@@ -29,4 +29,4 @@ class NoopStorage(base.StorageInterface):
         pass
 
     def should_write_image(self, task):
-        return True
+        return False
